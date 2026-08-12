@@ -532,21 +532,30 @@ async function sendHttpRequestAndSuspend(
     const textPath = cfg.response_mapping?.button_text_field;
     const valuePath = cfg.response_mapping?.button_value_field;
     
-    const textValues = textPath ? extractJsonPath(responseData, textPath) : [];
-    const valueValues = valuePath ? extractJsonPath(responseData, valuePath) : [];
+    // Extract using text path
+    let textValues = textPath ? extractJsonPath(responseData, textPath) : [];
+    
+    console.log("[flows] extracted raw texts:", textValues);
+
+    // If valuePath is a simple field name (not a full path), map it over array items
+    if (Array.isArray(textValues[0]) && valuePath && !valuePath.includes(".") && !valuePath.includes("[")) {
+      // textValues[0] is an array of objects, extract the field from each
+      const itemsArray = textValues[0] as Record<string, unknown>[];
+      textValues = itemsArray.map(item => item[valuePath]).filter(v => v !== undefined);
+      console.log("[flows] mapped field values:", textValues);
+    }
 
     console.log("[flows] extracted texts:", textValues);
-    console.log("[flows] extracted values:", valueValues);
 
     // Create buttons from extracted data
     const buttons = textValues.map((text, idx) => ({
       id: `btn_${idx}`,
-      title: String(text).substring(0, 20), // WhatsApp limit is 20 chars
+      title: String(text || "").substring(0, 20), // WhatsApp limit is 20 chars
     }));
 
     if (buttons.length === 0) {
       throw new Error(
-        `No button data extracted. Paths - text: "${textPath}", value: "${valuePath}"`
+        `No button data extracted. textPath: "${textPath}", valuePath: "${valuePath}"`
       );
     }
 
@@ -671,11 +680,18 @@ function interpolateVars(template: string, vars: Record<string, unknown>): strin
  * Supports basic paths like:
  *   "$.data.collections.items[*].name" → array of names
  *   "$.collections[0].name" → single value
+ *   "data.collections.items" with nested extract → gets items then maps key
  */
 function extractJsonPath(obj: unknown, path: string): unknown[] {
   if (!path || typeof path !== "string") return [];
   
-  const parts = path
+  // Normalize path — add $. prefix if missing
+  let normalizedPath = path.trim();
+  if (!normalizedPath.startsWith("$.")) {
+    normalizedPath = "$." + normalizedPath;
+  }
+
+  const parts = normalizedPath
     .replace(/^\$\./, "") // Remove $. prefix
     .split(/[\.\[\]]/)
     .filter(p => p && p !== "");
@@ -693,17 +709,15 @@ function extractJsonPath(obj: unknown, path: string): unknown[] {
     const isNumber = /^\d+$/.test(part);
 
     if (Array.isArray(current)) {
-      if (isWildcard || isNumber) {
-        if (isWildcard) {
-          // For wildcard, traverse each item
-          return current.flatMap(item => traverse(item, index + 1));
-        } else {
-          // For index, get specific item
-          const idx = parseInt(part, 10);
-          return traverse(current[idx], index + 1);
-        }
+      if (isWildcard) {
+        // For wildcard, traverse each item
+        return current.flatMap(item => traverse(item, index + 1));
+      } else if (isNumber) {
+        // For index, get specific item
+        const idx = parseInt(part, 10);
+        return traverse(current[idx], index + 1);
       }
-      // Array but no index/wildcard → traverse each item
+      // Array but no index/wildcard — traverse each item
       return current.flatMap(item => traverse(item, index));
     }
 
@@ -721,7 +735,7 @@ function extractJsonPath(obj: unknown, path: string): unknown[] {
     return [];
   }
 
-  return traverse(obj, 0).filter(v => v !== undefined);
+  return traverse(obj, 0).filter(v => v !== undefined && v !== null);
 }
 
 async function endRun(
