@@ -118,7 +118,6 @@ export function isAutoAdvancing(node_type: string): boolean {
     node_type === "start" ||
     node_type === "send_message" ||
     node_type === "send_media" ||
-    node_type === "send_http_request" ||
     node_type === "condition" ||
     node_type === "set_tag"
   );
@@ -129,6 +128,7 @@ export function isSuspending(node_type: string): boolean {
   return (
     node_type === "send_buttons" ||
     node_type === "send_list" ||
+    node_type === "send_http_request" ||
     node_type === "collect_input"
   );
 }
@@ -458,6 +458,147 @@ async function executeHandoff(
   await endRun(db, run.id, "handed_off", "handoff_node");
 }
 
+async function sendHttpRequestAndSuspend(
+  db: AdminClient,
+  run: FlowRunRow,
+  node: FlowNodeRow,
+): Promise<{ outcome: "advanced"; node_key: string }> {
+  const cfg = node.config as unknown as SendHttpRequestNodeConfig;
+  try {
+    // Interpolate variables in URL, headers, query, and variables
+    const url = interpolateVars(cfg.url, run.vars);
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(cfg.headers || {})) {
+      headers[key] = interpolateVars(value, run.vars);
+    }
+    const query = interpolateVars(cfg.query, run.vars);
+    const variables = interpolateVars(cfg.variables, run.vars);
+
+    // Log the request details
+    console.log(`[flows] send_http_request: ${cfg.method} ${url}`, {
+      headers,
+      query,
+      variables,
+    });
+
+    // Build request body
+    let body: string | undefined;
+    const requestHeaders = { "Content-Type": "application/json", ...headers };
+
+    if (cfg.method === "GET") {
+      // GET requests don't have a body
+    } else {
+      // For POST/PUT/PATCH/DELETE, use query as body (GraphQL or custom JSON)
+      if (query) {
+        // If query is provided, it's a GraphQL query
+        if (variables) {
+          body = JSON.stringify({
+            query,
+            variables: JSON.parse(variables),
+          });
+        } else {
+          body = JSON.stringify({ query });
+        }
+      }
+    }
+
+    // Make the HTTP request
+    const response = await fetch(url, {
+      method: cfg.method || "POST",
+      headers: requestHeaders,
+      body,
+    });
+
+    // Parse response
+    const responseText = await response.text();
+    let responseData: unknown;
+    try {
+      responseData = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      responseData = responseText;
+    }
+
+    // Log response details
+    console.log(`[flows] send_http_request response (status ${response.status}):`, responseData);
+
+    // Check for HTTP errors
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${responseText}`);
+    }
+
+    // Extract button data from response using JSONPath
+    console.log("[flows] response_mapping:", cfg.response_mapping);
+    
+    const textPath = cfg.response_mapping?.button_text_field;
+    const valuePath = cfg.response_mapping?.button_value_field;
+    
+    const textValues = textPath ? extractJsonPath(responseData, textPath) : [];
+    const valueValues = valuePath ? extractJsonPath(responseData, valuePath) : [];
+
+    console.log("[flows] extracted texts:", textValues);
+    console.log("[flows] extracted values:", valueValues);
+
+    // Create buttons from extracted data
+    const buttons = textValues.map((text, idx) => ({
+      id: `btn_${idx}`,
+      title: String(text).substring(0, 20), // WhatsApp limit is 20 chars
+    }));
+
+    if (buttons.length === 0) {
+      throw new Error(
+        `No button data extracted. Paths - text: "${textPath}", value: "${valuePath}"`
+      );
+    }
+
+    console.log("[flows] sending buttons:", buttons);
+
+    // Send interactive buttons
+    const { whatsapp_message_id } = await engineSendInteractiveButtons({
+      accountId: run.account_id,
+      userId: run.user_id,
+      conversationId: run.conversation_id!,
+      contactId: run.contact_id!,
+      bodyText: "Select an option:",
+      headerText: undefined,
+      footerText: undefined,
+      buttons,
+    });
+
+    await logEvent(db, run.id, "message_sent", node.node_key, {
+      node_type: "send_http_request",
+      method: cfg.method,
+      url,
+      status: response.status,
+      response_data: responseData,
+      buttons_sent: buttons.length,
+      whatsapp_message_id,
+    });
+
+    // Persist last_prompt_message_id for inbox quoting
+    const { data: msg } = await db
+      .from("messages")
+      .select("id")
+      .eq("message_id", whatsapp_message_id)
+      .maybeSingle();
+    await db
+      .from("flow_runs")
+      .update({
+        last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+      })
+      .eq("id", run.id);
+
+    return { outcome: "advanced", node_key: node.node_key };
+  } catch (err) {
+    const errorDetail = err instanceof Error ? err.message : String(err);
+    console.error(`[flows] send_http_request_and_suspend failed:`, errorDetail);
+    await logEvent(db, run.id, "error", node.node_key, {
+      reason: "send_http_request_failed",
+      detail: errorDetail,
+    });
+    throw err; // Let caller handle the failure
+  }
+}
+
 /**
  * Resolve a condition node's subject value from DB / run state, then
  * call the pure `evaluateConditionPredicate`. Splits out so the
@@ -523,6 +664,64 @@ function interpolateVars(template: string, vars: Record<string, unknown>): strin
     const v = vars[key];
     return v === undefined || v === null ? "" : String(v);
   });
+}
+
+/**
+ * Extract values from an object using JSONPath notation.
+ * Supports basic paths like:
+ *   "$.data.collections.items[*].name" → array of names
+ *   "$.collections[0].name" → single value
+ */
+function extractJsonPath(obj: unknown, path: string): unknown[] {
+  if (!path || typeof path !== "string") return [];
+  
+  const parts = path
+    .replace(/^\$\./, "") // Remove $. prefix
+    .split(/[\.\[\]]/)
+    .filter(p => p && p !== "");
+  
+  let current: unknown = obj;
+  const results: unknown[] = [];
+
+  function traverse(current: unknown, index: number): unknown[] {
+    if (index >= parts.length) {
+      return [current];
+    }
+
+    const part = parts[index];
+    const isWildcard = part === "*";
+    const isNumber = /^\d+$/.test(part);
+
+    if (Array.isArray(current)) {
+      if (isWildcard || isNumber) {
+        if (isWildcard) {
+          // For wildcard, traverse each item
+          return current.flatMap(item => traverse(item, index + 1));
+        } else {
+          // For index, get specific item
+          const idx = parseInt(part, 10);
+          return traverse(current[idx], index + 1);
+        }
+      }
+      // Array but no index/wildcard → traverse each item
+      return current.flatMap(item => traverse(item, index));
+    }
+
+    if (isNumber) {
+      // Can't index into non-array
+      return [];
+    }
+
+    if (current && typeof current === "object") {
+      const obj = current as Record<string, unknown>;
+      const value = obj[part];
+      return traverse(value, index + 1);
+    }
+
+    return [];
+  }
+
+  return traverse(obj, 0).filter(v => v !== undefined);
 }
 
 async function endRun(
@@ -638,89 +837,25 @@ async function advanceFromNodeKey(
       continue;
     }
     if (node.node_type === "send_http_request") {
-      const cfg = node.config as unknown as SendHttpRequestNodeConfig;
       try {
-        // Interpolate variables in URL, headers, query, and variables
-        const url = interpolateVars(cfg.url, run.vars);
-        const headers: Record<string, string> = {};
-        for (const [key, value] of Object.entries(cfg.headers || {})) {
-          headers[key] = interpolateVars(value, run.vars);
+        await sendHttpRequestAndSuspend(db, run, node);
+        // Persist the new current_node_key via optimistic UPDATE.
+        const advanced = await advanceCurrentNodeKey(
+          db,
+          run.id,
+          run.current_node_key,
+          node.node_key,
+        );
+        if (!advanced) {
+          await logEvent(db, run.id, "error", node.node_key, {
+            reason: "lost_race_during_advance",
+          });
         }
-        const query = interpolateVars(cfg.query, run.vars);
-        const variables = interpolateVars(cfg.variables, run.vars);
-
-        // Log the request details
-        console.log(`[flows] send_http_request: ${cfg.method} ${url}`, {
-          headers,
-          query,
-          variables,
-        });
-
-        // Build request body
-        let body: string | undefined;
-        const requestHeaders = { "Content-Type": "application/json", ...headers };
-
-        if (cfg.method === "GET") {
-          // GET requests don't have a body
-        } else {
-          // For POST/PUT/PATCH/DELETE, use query as body (GraphQL or custom JSON)
-          if (query) {
-            // If query is provided, it's a GraphQL query
-            if (variables) {
-              body = JSON.stringify({
-                query,
-                variables: JSON.parse(variables),
-              });
-            } else {
-              body = JSON.stringify({ query });
-            }
-          }
-        }
-
-        // Make the HTTP request
-        const response = await fetch(url, {
-          method: cfg.method || "POST",
-          headers: requestHeaders,
-          body,
-        });
-
-        // Parse response
-        const responseText = await response.text();
-        let responseData: unknown;
-        try {
-          responseData = responseText ? JSON.parse(responseText) : {};
-        } catch {
-          responseData = responseText;
-        }
-
-        // Log response details
-        console.log(`[flows] send_http_request response (status ${response.status}):`, responseData);
-
-        // Check for HTTP errors
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${responseText}`);
-        }
-
-        // Log event with response details
-        await logEvent(db, run.id, "message_sent", node.node_key, {
-          node_type: "send_http_request",
-          method: cfg.method,
-          url,
-          status: response.status,
-          response_data: responseData,
-        });
+        return { outcome: "advanced" };
       } catch (err) {
-        const errorDetail = err instanceof Error ? err.message : String(err);
-        console.error(`[flows] send_http_request failed:`, errorDetail);
-        await logEvent(db, run.id, "error", node.node_key, {
-          reason: "send_http_request_failed",
-          detail: errorDetail,
-        });
         await endRun(db, run.id, "failed", "send_http_request_failed");
         return { outcome: "completed" };
       }
-      currentKey = cfg.next_node_key;
-      continue;
     }
     if (node.node_type === "collect_input") {
       // Send the prompt and suspend. Customer's next TEXT reply will
@@ -1013,7 +1148,8 @@ async function handleReplyForActiveRun(
 
   // Two ways a reply can advance:
   //   1. Interactive button/list tap on a send_buttons/send_list node.
-  //   2. Text reply on a collect_input node — capture into vars.
+  //   2. Interactive button tap on a send_http_request node.
+  //   3. Text reply on a collect_input node — capture into vars.
   //
   // Everything else falls through to the fallback policy below.
   let matched: string | null = null;
@@ -1023,6 +1159,13 @@ async function handleReplyForActiveRun(
       currentNode.node_type === "send_list")
   ) {
     matched = matchReplyId(currentNode, message.reply_id);
+  } else if (
+    message.kind === "interactive_reply" &&
+    currentNode.node_type === "send_http_request"
+  ) {
+    // HTTP request node with dynamic buttons — all taps go to next_node_key
+    const cfg = currentNode.config as unknown as SendHttpRequestNodeConfig;
+    matched = cfg.next_node_key;
   } else if (
     message.kind === "text" &&
     currentNode.node_type === "collect_input"
