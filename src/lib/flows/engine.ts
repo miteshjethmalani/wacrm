@@ -55,6 +55,7 @@ import {
   type SendListNodeConfig,
   type SendMediaNodeConfig,
   type SendMessageNodeConfig,
+  type SendHttpRequestNodeConfig,
   type SetTagNodeConfig,
   type StartNodeConfig,
   type KeywordTriggerConfig,
@@ -117,6 +118,7 @@ export function isAutoAdvancing(node_type: string): boolean {
     node_type === "start" ||
     node_type === "send_message" ||
     node_type === "send_media" ||
+    node_type === "send_http_request" ||
     node_type === "condition" ||
     node_type === "set_tag"
   );
@@ -630,6 +632,91 @@ async function advanceFromNodeKey(
           detail: err instanceof Error ? err.message : String(err),
         });
         await endRun(db, run.id, "failed", "send_media_failed");
+        return { outcome: "completed" };
+      }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "send_http_request") {
+      const cfg = node.config as unknown as SendHttpRequestNodeConfig;
+      try {
+        // Interpolate variables in URL, headers, query, and variables
+        const url = interpolateVars(cfg.url, run.vars);
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(cfg.headers || {})) {
+          headers[key] = interpolateVars(value, run.vars);
+        }
+        const query = interpolateVars(cfg.query, run.vars);
+        const variables = interpolateVars(cfg.variables, run.vars);
+
+        // Log the request details
+        console.log(`[flows] send_http_request: ${cfg.method} ${url}`, {
+          headers,
+          query,
+          variables,
+        });
+
+        // Build request body
+        let body: string | undefined;
+        const requestHeaders = { "Content-Type": "application/json", ...headers };
+
+        if (cfg.method === "GET") {
+          // GET requests don't have a body
+        } else {
+          // For POST/PUT/PATCH/DELETE, use query as body (GraphQL or custom JSON)
+          if (query) {
+            // If query is provided, it's a GraphQL query
+            if (variables) {
+              body = JSON.stringify({
+                query,
+                variables: JSON.parse(variables),
+              });
+            } else {
+              body = JSON.stringify({ query });
+            }
+          }
+        }
+
+        // Make the HTTP request
+        const response = await fetch(url, {
+          method: cfg.method || "POST",
+          headers: requestHeaders,
+          body,
+        });
+
+        // Parse response
+        const responseText = await response.text();
+        let responseData: unknown;
+        try {
+          responseData = responseText ? JSON.parse(responseText) : {};
+        } catch {
+          responseData = responseText;
+        }
+
+        // Log response details
+        console.log(`[flows] send_http_request response (status ${response.status}):`, responseData);
+
+        // Check for HTTP errors
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${responseText}`);
+        }
+
+        // Log event with response details
+        await logEvent(db, run.id, "message_sent", node.node_key, {
+          node_type: "send_http_request",
+          method: cfg.method,
+          url,
+          status: response.status,
+          response_data: responseData,
+        });
+      } catch (err) {
+        const errorDetail = err instanceof Error ? err.message : String(err);
+        console.error(`[flows] send_http_request failed:`, errorDetail);
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "send_http_request_failed",
+          detail: errorDetail,
+        });
+        await endRun(db, run.id, "failed", "send_http_request_failed");
         return { outcome: "completed" };
       }
       currentKey = cfg.next_node_key;
