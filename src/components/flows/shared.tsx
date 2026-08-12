@@ -48,6 +48,7 @@ export type NodeType =
   | 'send_media'
   | 'collect_input'
   | 'condition'
+  | 'send_http_request'
   | 'set_tag'
   | 'handoff'
   | 'end';
@@ -145,6 +146,13 @@ export const NODE_META: Record<
     blurb: 'Branches on a rule',
     category: 'logic',
   },
+  send_http_request: {
+    label: 'Send HTTP request',
+    icon: Paperclip,
+    color: 'text-cyan-400',
+    blurb: 'Sends an HTTP request to an external service',
+    category: 'logic',
+  },
   set_tag: {
     label: 'Tag contact',
     icon: Tag,
@@ -202,6 +210,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   send_buttons: { l: 0.62, c: 0.16, h: 254 }, // cobalt
   send_list: { l: 0.62, c: 0.15, h: 277 }, // indigo
   send_media: { l: 0.65, c: 0.12, h: 210 }, // sky
+  send_http_request: { l: 0.65, c: 0.15, h: 195 }, // cyan
   collect_input: { l: 0.65, c: 0.1, h: 185 }, // teal — capture
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
@@ -378,6 +387,15 @@ export function summarizeNode(
           : truncate(prompt);
       }
       return varKey ? `→ vars.${varKey}` : null;
+    }
+    case 'send_http_request': {
+      const method = typeof cfg.method === 'string' ? cfg.method.toUpperCase() : '';
+      const url = typeof cfg.url === 'string' ? cfg.url : '';
+      return method && url
+        ? `${method} ${truncate(url, 50)}`
+        : url
+          ? truncate(url, 60)
+          : null;
     }
     case 'condition': {
       const subjectKey =

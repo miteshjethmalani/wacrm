@@ -699,6 +699,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'send_media',
   'collect_input',
   'condition',
+  'send_http_request',
   'set_tag',
   'handoff',
   'end',

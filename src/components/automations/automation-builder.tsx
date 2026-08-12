@@ -33,6 +33,7 @@ import {
   ArrowUp,
   MousePointerClick,
   List,
+  ChevronsLeftRightEllipsis,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -111,6 +112,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   condition: { label: "condition", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "send_webhook", icon: Webhook, border: "border-l-primary" },
   close_conversation: { label: "close_conversation", icon: CircleSlash, border: "border-l-primary" },
+  send_HTTP_request: { label: "send_HTTP_request", icon: ChevronsLeftRightEllipsis, border: "border-l-primary" },
 }
 
 const ADDABLE_STEPS: AutomationStepType[] = [
@@ -127,6 +129,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "condition",
   "send_webhook",
   "close_conversation",
+  "send_HTTP_request",
 ]
 
 const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
@@ -186,6 +189,15 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { subject: "tag_presence", operand: "", value: "" }
     case "send_webhook":
       return { url: "", headers: {}, body_template: "" }
+    case "send_HTTP_request":
+      return {
+        url: "",
+        method: "POST",
+        headers: {},
+        query: "",
+        variables: "{}",
+        response_mapping: { button_text_field: "", button_value_field: "" },
+      }
     case "close_conversation":
       return {}
     default:
@@ -616,6 +628,219 @@ function SendTemplateFields({
         )}
       </select>
     </FieldBlock>
+  )
+}
+
+/** HTTP Request configuration for calling external APIs (e.g., Vendure GraphQL).
+ *  Supports URL, method, headers, GraphQL queries, and response mapping to buttons. */
+function SendHttpRequestFields({
+  config,
+  onChange,
+  t,
+}: {
+  config: Record<string, unknown>
+  onChange: (patch: Record<string, unknown>) => void
+  t: ReturnType<typeof useTranslations>
+}) {
+  const url = (config.url as string) ?? ""
+  const method = (config.method as string) ?? "POST"
+  const headers = (config.headers as Record<string, string>) ?? {}
+  const query = (config.query as string) ?? ""
+  const variables = (config.variables as string) ?? "{}"
+  const responseMapping = (config.response_mapping as Record<string, string>) ?? {
+    button_text_field: "",
+    button_value_field: "",
+  }
+
+  const [headerKey, setHeaderKey] = useState("")
+  const [headerValue, setHeaderValue] = useState("")
+
+  function addHeader() {
+    if (headerKey.trim()) {
+      const newHeaders = { ...headers, [headerKey]: headerValue }
+      onChange({ headers: newHeaders })
+      setHeaderKey("")
+      setHeaderValue("")
+    }
+  }
+
+  function removeHeader(key: string) {
+    const newHeaders = { ...headers }
+    delete newHeaders[key]
+    onChange({ headers: newHeaders })
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* URL Field */}
+      <FieldBlock label={t("config.urlLabel", { defaultValue: "API URL" })}>
+        <Input
+          value={url}
+          onChange={(e) => onChange({ url: e.target.value })}
+          placeholder="https://vendure.example.com/graphql"
+          className="bg-muted text-foreground"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("config.urlHint", { defaultValue: "e.g., Vendure GraphQL endpoint" })}
+        </p>
+      </FieldBlock>
+
+      {/* Method Field */}
+      <FieldBlock label={t("config.methodLabel", { defaultValue: "HTTP Method" })}>
+        <select
+          value={method}
+          onChange={(e) => onChange({ method: e.target.value })}
+          className={SELECT_CLASS}
+        >
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
+          <option value="PATCH">PATCH</option>
+          <option value="DELETE">DELETE</option>
+        </select>
+      </FieldBlock>
+
+      {/* Headers */}
+      <FieldBlock label={t("config.headersLabel", { defaultValue: "Headers (Optional)" })}>
+        <div className="space-y-2">
+          {Object.entries(headers).map(([key, value]) => (
+            <div key={key} className="flex items-center gap-2">
+              <div className="flex-1 rounded border border-border bg-muted px-2 py-1 text-sm">
+                <span className="font-mono text-foreground">{key}:</span>{" "}
+                <span className="text-muted-foreground">{value}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeHeader(key)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+          <div className="flex gap-2">
+            <Input
+              value={headerKey}
+              onChange={(e) => setHeaderKey(e.target.value)}
+              placeholder="Header name (e.g., Authorization)"
+              className="flex-1 bg-muted text-foreground text-sm"
+            />
+            <Input
+              value={headerValue}
+              onChange={(e) => setHeaderValue(e.target.value)}
+              placeholder="Header value"
+              className="flex-1 bg-muted text-foreground text-sm"
+            />
+            <Button
+              type="button"
+              onClick={addHeader}
+              size="sm"
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </FieldBlock>
+
+      {/* GraphQL Query */}
+      <FieldBlock label={t("config.queryLabel", { defaultValue: "GraphQL Query" })}>
+        <Textarea
+          value={query}
+          onChange={(e) => onChange({ query: e.target.value })}
+          placeholder={`query {
+  products(first: 10) {
+    items {
+      id
+      name
+    }
+  }
+}`}
+          className="min-h-24 bg-muted font-mono text-xs text-foreground"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("config.queryHint", { defaultValue: "GraphQL query to fetch data (for Vendure or similar APIs)" })}
+        </p>
+      </FieldBlock>
+
+      {/* Variables */}
+      <FieldBlock label={t("config.variablesLabel", { defaultValue: "Variables (JSON)" })}>
+        <Textarea
+          value={variables}
+          onChange={(e) => onChange({ variables: e.target.value })}
+          placeholder="{}"
+          className="min-h-16 bg-muted font-mono text-xs text-foreground"
+        />
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t("config.variablesHint", { defaultValue: "JSON variables to pass to the query" })}
+        </p>
+      </FieldBlock>
+
+      {/* Response Mapping */}
+      <div className="rounded-md border border-border bg-muted/30 p-3">
+        <h4 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+          {t("config.responseMapping", { defaultValue: "Response Mapping (for Buttons)" })}
+        </h4>
+        <div className="space-y-2">
+          <FieldBlock label={t("config.buttonTextField", { defaultValue: "Button Text Field Path" })}>
+            <Input
+              value={responseMapping.button_text_field ?? ""}
+              onChange={(e) =>
+                onChange({
+                  response_mapping: { ...responseMapping, button_text_field: e.target.value },
+                })
+              }
+              placeholder="e.g., data.products.items[].name"
+              className="bg-background text-foreground text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("config.buttonTextHint", { defaultValue: "JSONPath to extract button display text from response" })}
+            </p>
+          </FieldBlock>
+
+          <FieldBlock label={t("config.buttonValueField", { defaultValue: "Button Value Field Path" })}>
+            <Input
+              value={responseMapping.button_value_field ?? ""}
+              onChange={(e) =>
+                onChange({
+                  response_mapping: { ...responseMapping, button_value_field: e.target.value },
+                })
+              }
+              placeholder="e.g., data.products.items[].id"
+              className="bg-background text-foreground text-sm"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("config.buttonValueHint", { defaultValue: "JSONPath to extract button value/ID from response" })}
+            </p>
+          </FieldBlock>
+        </div>
+      </div>
+
+      {/* Info Box */}
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700">
+        <p className="font-semibold mb-1">
+          {t("config.httpRequestInfo", { defaultValue: "API Call Execution:" })}
+        </p>
+        <ul className="list-inside list-disc space-y-1 text-amber-600">
+          <li>{t("config.infoStep1", { defaultValue: "The API will be called when this step runs" })}</li>
+          <li>
+            {t("config.infoStep2", {
+              defaultValue: "Response data will be extracted using the JSONPath fields",
+            })}
+          </li>
+          <li>
+            {t("config.infoStep3", {
+              defaultValue: "Buttons will be generated from the extracted data",
+            })}
+          </li>
+          <li>
+            {t("config.infoStep4", {
+              defaultValue: "Make sure your API returns valid JSON",
+            })}
+          </li>
+        </ul>
+      </div>
+    </div>
   )
 }
 
@@ -1480,6 +1705,14 @@ function StepEditor({
           </FieldBlock>
         </>
       )
+    case "send_HTTP_request":
+      return (
+        <SendHttpRequestFields
+          config={cfg as Record<string, unknown>}
+          onChange={(patch) => set(patch)}
+          t={t}
+        />
+      )
     case "close_conversation":
       return (
         <p className="text-xs text-muted-foreground">
@@ -1520,6 +1753,8 @@ function previewFor(step: BuilderStep): string {
     case "condition":
       return `when ${step.step_config.subject ?? "?"}`
     case "send_webhook":
+      return (step.step_config.url as string) || "no url"
+    case "send_HTTP_request":
       return (step.step_config.url as string) || "no url"
     default:
       return ""

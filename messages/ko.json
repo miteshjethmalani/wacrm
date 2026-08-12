@@ -836,6 +836,7 @@
         "wait": "대기",
         "condition": "조건 (If/Else)",
         "send_webhook": "웹훅 보내기",
+        "send_HTTP_request": "HTTP 요청",
         "close_conversation": "대화 닫기"
       },
       "triggers": {
@@ -1154,6 +1155,10 @@
           "label": "만약 / 아니면",
           "blurb": "규칙에 따라 분기합니다"
         },
+        "send_http_request": {
+          "label": "HTTP 요청 보내기",
+          "blurb": "외부 서비스에 HTTP 요청을 보냅니다"
+        },
         "set_tag": {
           "label": "연락처 태그 지정",
           "blurb": "연락처 태그를 추가하거나 제거합니다"
@@ -1276,7 +1281,7 @@
       "labelTooLong": "라벨은 {max}자 이하여야 합니다",
       "copied": "초대 링크가 복사되었습니다",
       "clipboardBlocked": "클립보드 접근이 차단되었습니다 — 링크를 직접 복사하세요",
-      "whatsappMessage": "이 링크(유효 기간 {expiresInDays}일)로 wacrm의 {accountName}에 참여하세요: {url}"
+      "whatsappMessage": "이 링크(유효 기간 {expiresInDays}일)로 srishtivitality의 {accountName}에 참여하세요: {url}"
     },
     "tagsAndFields": {
       "title": "필드 & 태그",

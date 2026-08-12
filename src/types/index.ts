@@ -271,6 +271,7 @@ export interface WhatsAppConfig {
   user_id: string;
   phone_number_id: string;
   waba_id?: string;
+  business_id?: string;
   access_token: string;
   verify_token?: string;
   status: 'connected' | 'disconnected';
@@ -454,7 +455,8 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
-  | 'close_conversation';
+  | 'close_conversation'
+  | 'send_HTTP_request';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
 

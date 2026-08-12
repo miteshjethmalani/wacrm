@@ -184,6 +184,17 @@ export function NodeConfigForm({
         />
       );
 
+    case "send_http_request":
+      return (
+        <SendHttpRequestForm
+          cfg={cfg as SendHttpRequestCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+          t={t}
+        />
+      );
+
     case "set_tag":
       return (
         <SetTagForm
@@ -884,6 +895,182 @@ const MEDIA_ACCEPT: Record<NonNullable<SendMediaCfg["media_type"]>, string> = {
   document:
     "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
 };
+
+// ============================================================
+// send_http_request
+// ============================================================
+
+interface SendHttpRequestCfg {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  query?: string;
+  variables?: string;
+  response_mapping?: {
+    button_text_field?: string;
+    button_value_field?: string;
+  };
+  next_node_key?: string;
+}
+
+function SendHttpRequestForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+  t,
+}: {
+  cfg: SendHttpRequestCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const headers = cfg.headers ?? {};
+  const [headerKey, setHeaderKey] = useState("");
+  const [headerValue, setHeaderValue] = useState("");
+  const responseMapping = cfg.response_mapping ?? {};
+
+  const addHeader = () => {
+    if (headerKey.trim()) {
+      onUpdateConfig({
+        headers: { ...headers, [headerKey]: headerValue },
+      });
+      setHeaderKey("");
+      setHeaderValue("");
+    }
+  };
+
+  const removeHeader = (key: string) => {
+    const updated = { ...headers };
+    delete updated[key];
+    onUpdateConfig({ headers: updated });
+  };
+
+  return (
+    <>
+      {/* URL Input */}
+      <TextRow
+        label="URL"
+        value={cfg.url ?? ""}
+        onChange={(v) => onUpdateConfig({ url: v })}
+      />
+
+      {/* Method Selection */}
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">Method</label>
+        <Select
+          value={cfg.method ?? "POST"}
+          onValueChange={(v) => onUpdateConfig({ method: v })}
+        >
+          <SelectTrigger className="bg-muted">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="GET">GET</SelectItem>
+            <SelectItem value="POST">POST</SelectItem>
+            <SelectItem value="PUT">PUT</SelectItem>
+            <SelectItem value="PATCH">PATCH</SelectItem>
+            <SelectItem value="DELETE">DELETE</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Headers Management */}
+      <div>
+        <label className="mb-2 block text-xs text-muted-foreground">
+          Custom Headers
+        </label>
+        <div className="space-y-2">
+          {Object.entries(headers).map(([key, value]) => (
+            <div key={key} className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+              <div className="flex-1">
+                <p className="text-xs font-mono text-foreground">
+                  {key}: {value}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => removeHeader(key)}
+                className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <Input
+            value={headerKey}
+            onChange={(e) => setHeaderKey(e.target.value)}
+            placeholder="Header name (e.g., Authorization)"
+            className="bg-muted"
+            size={1}
+          />
+          <Input
+            value={headerValue}
+            onChange={(e) => setHeaderValue(e.target.value)}
+            placeholder="Header value"
+            className="bg-muted"
+            size={1}
+          />
+          <Button variant="outline" size="sm" onClick={addHeader}>
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* GraphQL Query */}
+      <TextRow
+        label="GraphQL Query"
+        value={cfg.query ?? ""}
+        onChange={(v) => onUpdateConfig({ query: v })}
+        rows={4}
+      />
+
+      {/* JSON Variables */}
+      <TextRow
+        label="JSON Variables"
+        value={cfg.variables ?? "{}"}
+        onChange={(v) => onUpdateConfig({ variables: v })}
+        rows={3}
+      />
+
+      {/* Response Field Mapping */}
+      <div className="rounded-md border border-border bg-muted/40 p-3">
+        <h3 className="mb-3 text-xs font-semibold text-foreground">Response Field Mapping (JSONPath)</h3>
+        <TextRow
+          label="Button Text Field"
+          value={responseMapping.button_text_field ?? ""}
+          onChange={(v) =>
+            onUpdateConfig({
+              response_mapping: { ...responseMapping, button_text_field: v },
+            })
+          }
+        />
+        <TextRow
+          label="Button Value Field"
+          value={responseMapping.button_value_field ?? ""}
+          onChange={(v) =>
+            onUpdateConfig({
+              response_mapping: { ...responseMapping, button_value_field: v },
+            })
+          }
+        />
+      </div>
+
+      {/* Next Node */}
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="After sending, advance to"
+      />
+    </>
+  );
+}
 
 const FLOW_MEDIA_BUCKET = "flow-media";
 
